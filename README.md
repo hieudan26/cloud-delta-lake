@@ -252,3 +252,93 @@ df_parquet.write.mode("overwrite").format("delta").partitionBy("year").save(delt
 df_delta = spark.read.format("delta").load(deltaPath)
 df_delta.show()
 ```
+### 5.4: Khai thác dữ liệu bằng delta-lake trên notebook
+##### 5.4.1: Chuẩn bị dữ liệu
+![image](https://user-images.githubusercontent.com/61266491/203794460-6ca20efd-0e5a-4036-88c4-3dd2578dadcd.png)
+</br> Sử dụng lại kho dữ liệu của amazone customer review dataset được quyền sủ dụng cho mục đích học thuật.
+https://us-east-1.console.aws.amazon.com/s3/home?region=us-east-1&bucket=amazon-reviews-pds
+![image](https://user-images.githubusercontent.com/61266491/203794586-1b665016-5133-4459-8c4f-05b2d6824d18.png)
+</br>Sau đó chúng ta đọc toàn bộ file .parquet từ danh mục Gift_Card của dữ liệu aws public và lưu vào df_parquet
+Sau đó chúng ta sử dụng SQL để lưu về bucket đã chuẩn bị từ trước của chúng ta theo từng năm 1
+```python
+deltaPath = "s3://ute-delta-lake/delta-amazon-reviews-pds/"
+df_parquet = spark.read.parquet("s3://amazon-reviews-pds/parquet/product_category=Gift_Card/*.parquet")
+df_parquet.printSchema()
+df_parquet.write.mode("overwrite").format("delta").partitionBy("year").save(deltaPath)
+spark.conf.set('table.location', deltaPath)
+```
+##### 5.4.2: Đọc dữ liệu
+![image](https://user-images.githubusercontent.com/61266491/203795261-fcee882e-a31c-4077-83ce-3fdd5072c6ee.png)
+![image](https://user-images.githubusercontent.com/61266491/203801918-18383f43-52d9-4e7c-b0f3-ecb672b1ef32.png)
+![image](https://user-images.githubusercontent.com/61266491/203801955-b2f2f779-4796-4001-8081-f85ff6bc92c8.png)
+
+Dùng spark để đọc dữ liệu lên
+Dùng lệnh show để tiến hành show ra dữ liệu đã đọc
+```python
+df_delta = spark.read.format("delta").load(deltaPath)
+df_delta.show()
+
+%%sql
+SELECT * FROM  delta.`s3://ute-delta-lake/delta-amazon-reviews-pds/` LIMIT 10
+
+df_delta.createOrReplaceTempView("aws_product_review")
+spark.sql("select marketplace,customer_id,review_date  from aws_product_review LIMIT 30").show(30)
+```
+##### 5.4.3: Cập nhật dữ liệu
+![image](https://user-images.githubusercontent.com/61266491/203802073-fadff51e-aa2d-4518-a47b-6373255ab148.png)
+</br>Chuyển US sang USA
+```python
+deltaTable = DeltaTable.forPath(spark, deltaPath) #khai báo 1 datatable
+deltaTable.update("marketplace = 'US'",{ "marketplace":"'USA'"}) # Thay đổi toàn bộ marketplace US thành USA
+#hoặc
+%%sql
+update delta.`s3://ute-delta-lake/delta-amazon-reviews-pds/` 
+set marketplace = 'USA' where marketplace = 'US'
+```
+##### 5.4.4: Xóa dữ liệu
+![image](https://user-images.githubusercontent.com/61266491/203802518-8216d8f9-6081-4fdd-b187-3c6061f54d7d.png)
+```python
+df_delta.filter("verified_purchase = 'N'").show() #Xem dữ liệu trước khi xóa
+deltaTable.delete("verified_purchase = 'N'") #Xóa dữ liệu
+df_delta.filter("verified_purchase = 'N'").show() #Show lại sau khi xóa
+```
+![image](https://user-images.githubusercontent.com/61266491/203802619-1bc6d9a1-a862-4a8a-b28b-ac344fd411a3.png)
+</br>Lưu ý rằng phương thức xóa chỉ loại bỏ dữ liệu khỏi phiên bản mới nhất của bảng. Những hồ sơ này vẫn có mặt trong các snap shot cũ hơn của dữ liệu.
+```python
+prev_version = deltaTable.history().selectExpr('max(version)').collect()[0][0] - 1
+prev_version_data = spark.read.format('delta').option('versionAsOf', prev_version).load(deltaPath)
+prev_version_data.filter("verified_purchase = 'N'").show(10)
+```
+##### 5.4.5: Time travel
+![image](https://user-images.githubusercontent.com/61266491/203803821-06338f93-2600-4175-8234-c36ab1aa20d5.png)
+```python
+deltaTable.history(100).select("version", "timestamp", "operation", "operationParameters").show(truncate=False) # show ra lịch sử chỉnh sửa
+df_time_travel = spark.read.format("delta").option("versionAsOf", 0).load(deltaPath) # đọc lại verion 0 ở lịch sử chỉnh sửa và show ra ta có thể thấy là marketplace vẫn là US trước khi sửa
+df_time_travel.show()
+```
+##### 5.4.5: Upsert
+![image](https://user-images.githubusercontent.com/61266491/203804279-dc57dac4-20e8-4ba4-8bbc-ec469c8a6c35.png)
+</br>Tạo ra 1 list gồm 2 item để thực hiện upsert update XODE và insert XOA1 vì nó chưa tồn tại
+Sau đó tạo 1 frame chứa data để upsert
+```python
+spark.sql("select * from aws_product_review where review_id in ('R315TR7JY5XODE', 'R315TR7JY5XOA1')").show() # show kết quả trước khi upsert
+data_upsert = [ {"marketplace":'US',"customer_id":'38602100', "review_id":'R315TR7JY5XODE',"product_id":'B00CHSWG6O',"product_parent":'336289302',"product_title" :'Amazon eGift Card', "star_rating":'5', "helpful_votes":'2',"total_votes":'0',"vine":'N',"verified_purchase":'Y',"review_headline":'GREAT',"review_body":'GOOD PRODUCT',"review_date":'2014-04-11',"year":'2014'},
+{"marketplace":'US',"customer_id":'38602103', "review_id":'R315TR7JY5XOA1',"product_id":"B007V6EVY2","product_parent":'910961751',"product_title" :'Amazon eGift Card', "star_rating":'5', "helpful_votes":'2',"total_votes":'0',"vine":'N',"verified_purchase":'Y',"review_headline":'AWESOME',"review_body":'GREAT PRODUCT',"review_date":'2014-04-11',"year":'2014'}
+]
+df_data_upsert = spark.createDataFrame(data_upsert)
+df_data_upsert.show()
+```
+![image](https://user-images.githubusercontent.com/61266491/203804332-d0f54653-5e9b-4ca4-a615-739d6430756a.png)
+```python
+(deltaTable
+.alias('t')
+.merge(df_data_upsert.alias('u'), 't.review_id = u.review_id')
+.whenMatchedUpdateAll()
+.whenNotMatchedInsertAll()
+.execute())
+spark.sql("select * from aws_product_review where review_id in ('R315TR7JY5XODE', 'R315TR7JY5XOA1')").show() # show sau khi khi upsert
+```
+# Tài liệu tham khảo:
+https://towardsdatascience.com/getting-started-with-delta-lake-spark-in-aws-the-easy-way-9215f2970c58
+https://aws.amazon.com/vi/blogs/big-data/build-a-high-performance-transactional-data-lake-using-open-source-delta-lake-on-amazon-emr/
+https://garystafford.medium.com/building-a-simple-data-lake-on-aws-df21ca092e32
