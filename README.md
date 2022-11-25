@@ -80,8 +80,27 @@ Tạo 1 instance EC2 như bài thực hành lab đã học với cấu hình t�
 ##### 5.2.2: Tạo bucket S3
 
 ![image](https://user-images.githubusercontent.com/61266491/203778190-ebb61697-a030-4d32-bf8c-7656055babe9.png)
+![image](https://user-images.githubusercontent.com/61266491/204015334-4bd84842-51de-4d18-b5d1-6f5741d048e2.png)
+
 Tạo 1 bucket S3 để lưu trữ dữ liệu.
 Lưu ý: Ở đây do tài khoản lab leaner không hỗ trợ IAM nên em public nó luôn để sử dụng.
+```js
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "Stmt1594969687722",
+            "Effect": "Allow",
+            "Principal": "*",
+            "Action": "s3:*",
+            "Resource": [
+                "arn:aws:s3:::delta-lake-ute",
+                "arn:aws:s3:::delta-lake-ute/*"
+            ]
+        }
+    ]
+}
+```
 ##### 5.2.3: Truy cập vào EC2 instance
 
 ![image](https://user-images.githubusercontent.com/61266491/203778454-03b240dc-f73c-4eac-a170-4370720872b8.png)
@@ -144,6 +163,7 @@ Import dữ liệu từ: https://stats.govt.nz/large-datasets/csv-files-for-down
  ```
 Sau đó thực hiện tạo một view tạm và thực hiện câu truy vấn:
 ```python
+df.createOrReplaceTempView("employment_tbl")
 spark.sql("select Series_title_2,count(*) as count from employment_tbl group by Series_title_2 order by 2 desc").show(truncate=False) 
 ```
 mục đích của câu lệnh này là lấy ra các tile và đếm số lượng của nhân viên trong title đó từ file csv
